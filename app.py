@@ -1,185 +1,222 @@
-from flask import Flask, request, jsonify
+# from flask import Flask, request, jsonify, send_from_directory
+from flask import Flask, request, jsonify, send_from_directory, render_template
 from bs4 import BeautifulSoup
 import requests
 import logging
 import re
-from pymongo import MongoClient
-from pymongo.errors import PyMongoError
+from pymongo.mongo_client import MongoClient
+from pymongo.server_api import ServerApi
 from datetime import datetime
 from bson import ObjectId
 from flask_cors import CORS
-
+# Mar#2003!@00
 app = Flask(__name__)
 CORS(app)
-
-# Setup logging
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# MongoDB configuration
-MONGO_URI = "mongodb+srv://21bcm043:Mar2003@internship.pmxvooh.mongodb.net/?retryWrites=true&w=majority&appName=Internship"
-try:
-    client = MongoClient(MONGO_URI)
-    db = client['ProductDatabase']
-    products_collection = db['ProductDetails']
-    bucket_list_collection = db['BucketList']
-    logger.info("Connected to MongoDB successfully!")
-except PyMongoError as e:
-    logger.error("Error connecting to MongoDB: %s", e)
 
-# Utility function for scraping product data
-def scrape_product_data(url):
+uri = "mongodb+srv://21bcm043:Mar2003@internship.pmxvooh.mongodb.net/?retryWrites=true&w=majority&appName=Internship"
+
+client = MongoClient(uri, server_api=ServerApi('1'))
+try:
+    client.admin.command('ping')
+    print("Pinged your deployment. You successfully connected to MongoDB!")
+except Exception as e:
+    print(e)
+db = client['ProductDatabase']  # Replace 'your_database_name_here' with your actual database name
+
+# Accessing the collection
+products_collection = db['ProductDetails']
+
+
+@app.route('/scrape', methods=['GET'])
+def scrape_product():
+    url = request.args.get('url')
+    # url = "https://www.amazon.in/Apple-MacBook-Chip-13-inch-256GB/dp/B08N5T6CZ6/ref=sr_1_1_sspa?dib=eyJ2IjoiMSJ9.0wUJxkajdW_AXocIRrc54ysXU75fq8Y4zSe_afkYWsLDtC-yfdnogJsxNFHjtyZRizyAoygfaQDRD15ZqimDaEo67YZ0msPlW77FWQVjmG0zQG2APt3nLqU7X05tVexXHfeYTirgNg999Ec7A6old5ZfDqv1ZNcWx2VTozoifLTSMuz8SqKc8gHbGfckDLTubm7FJMsYcrkT5JeyWqQegpPZDYopxXySmT0zetW8zUs.SvYOrXL1QDdhSR0K9zaTBrO0QWJNcwipJaTeipAlSYw&dib_tag=se&keywords=macbook&qid=1713349039&sr=8-1-spons&sp_csd=d2lkZ2V0TmFtZT1zcF9hdGY&psc=1"
+    if not url:
+        return jsonify({'error': 'URL parameter is missing'}), 400
+
     try:
-        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/86.0.4240.198 Safari/537.36 OPR/72.0.3815.378"}
-        response = requests.get(url, headers=headers)
-        soup = BeautifulSoup(response.content, "lxml")
+        headers_param={"User-Agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/86.0.4240.198 Safari/537.36 OPR/72.0.3815.378"}
+        r = requests.get(url, headers=headers_param)
+        soup = BeautifulSoup(r.content, "lxml")
 
         # Extracting price
-        price_element = soup.find("span", class_=re.compile(r'a-price'))
-        price_with_currency = price_element.text.strip() if price_element else "Price not found"
+        price = soup.find("span", attrs={"class": "aok-offscreen"}) or soup.find("span", attrs={"class": "a-offscreen"})
+        if price:
+            price_text = price.text.strip()
+            match = re.search(r'(\D*)([\d,.]+)\s*(\w+)', price_text)
+            if match:
+                price_with_currency = match.group(1) + match.group(2) + ' ' + match.group(3)
+                print(price_with_currency[0:-4]);
+            else:
+                price_with_currency = "Price format not recognized"
+                
+                
+        else:
+            price_with_currency = "Price not found"
+            print("error")
 
         # Extracting description
-        description_element = soup.find("span", id="productTitle")
-        description = description_element.text.strip() if description_element else "Description not found"
+        description = soup.find("span", attrs={"id": "productTitle"})
+        description = description.text.strip() if description else "Description not found"
 
         # Extracting customer ratings
-        ratings_element = soup.find("span", id="acrCustomerReviewText")
-        ratings = ratings_element.text.strip() if ratings_element else "Customer Ratings not found"
+        ratings = soup.find("span", attrs={"id": "acrCustomerReviewText"})
+        ratings = ratings.text.strip() if ratings else "Customer Ratings not found"
 
         # Extracting number of customer reviews
-        reviews_element = soup.find("span", id="acrPopover")
-        reviews = reviews_element.text.strip() if reviews_element else "Number of Reviews not found"
+        reviews = soup.find("span", attrs={"id": "acrPopover"})
+        reviews = reviews.text.strip() if reviews else "Number of Reviews not found"
 
         # Extracting images
-        images = soup.find_all("img", class_="a-dynamic-image")
-        image_urls = [image["src"] for image in images[:2]] if images else ["Product images not found"]
-
+        images = soup.find_all("img", attrs={"class": "a-dynamic-image"})
+        image_urls = [image["src"] for image in images] if images else ["Product images not found"]
+        image_urls = image_urls[:2]
         # Extracting specifications
-        specifications_element = soup.find("div", id="productOverview_feature_div")
-        specifications = specifications_element.find_all("tr") if specifications_element else []
-        specifications_dict = {cell[0].text.strip(): cell[1].text.strip() for cell in [row.find_all("td") for row in specifications]}
+        specifications = soup.find("div", attrs={"id": "productOverview_feature_div"})
+        specifications = specifications.find_all("tr") if specifications else []
 
-        # Extracting current price
-        current_price_element = soup.find("span", class_="a-price-whole")
-        current_price = float(current_price_element.text.strip().replace(',', '')) if current_price_element else None
+        specifications_dict = {}
+        for row in specifications:
+            cells = row.find_all("td")
+            if cells:
+                key = cells[0].text.strip()
+                value = cells[1].text.strip()
+                specifications_dict[key] = value
+        
+        price_element = soup.find("span", attrs={"class": "a-price-whole"})
+        if price_element:
+            price_text = price_element.text.strip()
+            # Remove commas and convert to integer
+            current_price = float(price_text.replace(',', ''))
+        else:
+            current_price = None 
+        
+        timestamp = datetime.now()
 
-        return {
+        products_collection.insert_one({
+            "url": url,
+            "description": description,
+            "current_price": current_price,
+            "timestamp": timestamp
+            
+        })
+        return jsonify({
             "description": description,
             "price": price_with_currency[:-4],
             "customer_ratings": ratings,
             "number_of_reviews": reviews[4:],
             "image_urls": image_urls,
-            "specifications": specifications_dict,
-            "current_price": current_price
-        }
+            "specifications": specifications_dict
+        })
+        # return "testing"
+
     except Exception as e:
-        logger.error("Error occurred while scraping: %s", e)
-        return None
+        logger.exception("An error occurred during scraping:")
+        return jsonify({'error': 'Internal server error'}), 500
 
-# Route for scraping product data
-@app.route('/scrape', methods=['GET'])
-def scrape_endpoint():
-    url = request.args.get('url')
-    if not url:
-        return jsonify({'error': 'URL parameter is missing'}), 400
 
-    product_data = scrape_product_data(url)
-    if product_data:
-        product_data["timestamp"] = datetime.now()
-        try:
-            products_collection.insert_one(product_data)
-            logger.info("Product data inserted into MongoDB")
-        except PyMongoError as e:
-            logger.error("Error inserting product data into MongoDB: %s", e)
-        return jsonify(product_data)
-    else:
-        return jsonify({'error': 'Failed to scrape product data'}), 500
+bucket_list_collection = db["BucketList"]  # Your collection name
 
-# Route for adding a product to the bucket list
 @app.route('/add_to_bucket_list', methods=['POST'])
 def add_to_bucket_list():
-    data = request.get_json()
-    if not data or 'url' not in data or 'shortName' not in data:
-        return jsonify({"error": "Invalid request body"}), 400
-
     try:
-        result = bucket_list_collection.insert_one(data)
-        logger.info("Product added to bucket list: %s", data)
-        return jsonify({"message": "Bucket item added successfully", "id": str(result.inserted_id)})
-    except PyMongoError as e:
-        logger.error("Error adding product to bucket list: %s", e)
-        return jsonify({"error": "Failed to add product to bucket list"}), 500
+        data = request.get_json()
+        print(data)
+    
+        if data:
+            bucket_item = {
+                "url": data.get("url"),
+                "shortName": data.get("shortName"),
+                # "showUrl": False  # Initially set to False
+            }
+            # Inserting the bucket item into the collection
+            result = bucket_list_collection.insert_one(bucket_item)
+            print('Bucket database updated')
+            return jsonify({"message": "Bucket item added successfully", "id": str(result.inserted_id)})
+            
+        else:
+            return jsonify({"error": "Invalid request body"}), 400
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
-# Route for retrieving the bucket list
+
 @app.route('/get_bucket_list', methods=['GET'])
 def get_bucket_list():
     try:
+        # Fetch all bucket list items from the collection
         bucket_list = list(bucket_list_collection.find({}, {"_id": 0}))
         return jsonify(bucket_list)
-    except PyMongoError as e:
-        logger.error("Error retrieving bucket list: %s", e)
-        return jsonify({"error": "Failed to retrieve bucket list"}), 500
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
-# Route for updating a product in the bucket list
+
 @app.route('/update_bucket_list/<string:_id>', methods=['PUT'])
 def update_bucket_list(_id):
-    data = request.get_json()
-    if not data or 'url' not in data or 'shortName' not in data:
-        return jsonify({"error": "Invalid request body"}), 400
-
     try:
-        result = bucket_list_collection.update_one({"_id": ObjectId(_id)}, {"$set": data})
-        if result.modified_count == 1:
-            logger.info("Bucket item updated: %s", data)
-            return jsonify({"message": "Bucket item updated successfully"})
+        data = request.get_json()
+        if data:
+            updated_item = {
+                "url": data.get("url"),
+                "shortName": data.get("shortName"),
+            }
+            # Updating the bucket item based on _id
+            result = bucket_list_collection.update_one({"_id": ObjectId(_id)}, {"$set": updated_item})
+            if result.modified_count == 1:
+                return jsonify({"message": "Bucket item updated successfully"})
+            else:
+                return jsonify({"error": "Failed to update bucket item"}), 400
         else:
-            return jsonify({"error": "Failed to update bucket item"}), 400
-    except PyMongoError as e:
-        logger.error("Error updating bucket item: %s", e)
-        return jsonify({"error": "Failed to update bucket item"}), 500
+            return jsonify({"error": "Invalid request body"}), 400
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
-# Route for deleting a product from the bucket list
-@app.route('/delete_from_bucket_list/<string:_id>', methods=['DELETE'])
-def delete_from_bucket_list(_id):
+
+@app.route('/delete_from_bucket_list/<string:shortName>', methods=['DELETE'])
+def delete_from_bucket_list(shortName):
     try:
-        result = bucket_list_collection.delete_one({"_id": ObjectId(_id)})
+        # Deleting the bucket item
+        result = bucket_list_collection.delete_one({"shortName": shortName})
         if result.deleted_count == 1:
-            logger.info("Bucket item deleted: %s", _id)
             return jsonify({"message": "Bucket item deleted successfully"})
         else:
             return jsonify({"error": "Failed to delete bucket item"}), 400
-    except PyMongoError as e:
-        logger.error("Error deleting bucket item: %s", e)
-        return jsonify({"error": "Failed to delete bucket item"}), 500
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
-# Route for retrieving price history of a product
+
 @app.route('/price-history', methods=['GET'])
 def get_price_history():
-    url = request.args.get('url')
-    if not url:
-        return jsonify({'error': 'URL parameter is missing'}), 400
-
     try:
-        price_history = list(products_collection.find({"url": url}, {"_id": 0, "current_price": 1, "timestamp": 1}))
-        return jsonify(price_history)
-    except PyMongoError as e:
-        logger.error("Error retrieving price history: %s", e)
-        return jsonify({"error": "Failed to retrieve price history"}), 500
+        url = request.args.get('url')
+        if not url:
+            return jsonify({'error': 'URL parameter is missing'}), 400
 
-# Route for configuring email for price notifications
+        # Query the database for price history of the given URL
+        price_history = list(products_collection.find({"url": url}, {"_id": 0, "current_price": 1, "timestamp": 1}))
+
+        return jsonify(price_history)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 @app.route('/configure-email', methods=['POST'])
 def configure_email():
-    data = request.get_json()
-    if not data or 'email' not in data or 'url' not in data:
-        return jsonify({"error": "Invalid request body"}), 400
-
     try:
-        products_collection.update_one({'url': data['url']}, {'$set': {'email': data['email']}}, upsert=True)
-        logger.info("Email configuration successful for URL: %s", data['url'])
+        data = request.get_json()
+        email = data.get('email')
+        url = data.get('url')
+
+        # Update or insert the email address into the ProductDetails collection
+        products_collection.update_one(
+            {'url': url},
+            {'$set': {'email': email}},
+            upsert=True
+        )
+
         return jsonify({'message': 'Email configuration successful'})
-    except PyMongoError as e:
-        logger.error("Error configuring email: %s", e)
-        return jsonify({'error': 'Failed to configure email'}), 500
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
     app.run(debug=True)
