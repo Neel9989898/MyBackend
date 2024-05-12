@@ -8,3 +8,4 @@ Flask-SQLAlchemy==3.1.1
 pymongo==4.6.3
 requests==2.25.1
 gunicorn==22.0.0
+lxml
